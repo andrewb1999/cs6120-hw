@@ -21,5 +21,9 @@ fn main() {
             num_adds += add;
         }
     }
-    println!("Program contains {} add instructions", num_adds)
+    if num_adds == 1 {
+        println!("Program contains 1 add instruction")
+    } else {
+        println!("Program contains {} add instructions", num_adds)
+    }
 }

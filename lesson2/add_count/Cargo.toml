@@ -9,5 +9,5 @@ edition = "2021"
 
 [dependencies.bril-rs]
 version = "0.1.0"
-path = "../bril/bril-rs"
+path = "../../bril/bril-rs"
 features = ["ssa", "memory", "float", "speculate"]

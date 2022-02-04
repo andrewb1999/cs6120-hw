@@ -1,0 +1,11 @@
+[package]
+name = "tdce"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies.bril-rs]
+version = "0.1.0"
+path = "../../bril/bril-rs"
+features = ["ssa", "memory", "float", "speculate"]

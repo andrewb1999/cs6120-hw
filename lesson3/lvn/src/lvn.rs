@@ -184,43 +184,142 @@ fn get_dest(table : &LvnTable, dest : &String, overwritten_later : bool) -> Stri
     }
 }
 
-fn const_instr(instr : AbstractInstruction, value : Literal) -> AbstractCode {
-    let new_instr = match instr {
+fn const_instr(instr : AbstractInstruction, new_dest : Option<String>, value : Literal) -> AbstractCode {
+    let (dest, const_type) = match instr {
         AbstractInstruction::Value {dest, op_type, ..} => 
-            AbstractInstruction::Constant {op : ConstOps::Const, dest, const_type : op_type, value},
+            if let Some(new_dest) = new_dest {
+                (new_dest, op_type)
+            } else {
+                (dest, op_type)
+            },
         AbstractInstruction::Constant {dest, const_type, ..} =>
-            AbstractInstruction::Constant {op : ConstOps::Const, dest, const_type, value},
-        _ => instr,
+            if let Some(new_dest) = new_dest {
+                (new_dest, const_type)
+            } else {
+                (dest, const_type)
+            },
+        _ => panic!("Cannot convert effect into const"),
     };
+    let new_instr = AbstractInstruction::Constant {op : ConstOps::Const, dest, const_type, value};
     AbstractCode::Instruction(new_instr)
 }
 
-// fn apply_fold(op : &String, a : &Literal, b : Option<&Literal>) -> Option<Literal> {
-//     let a_type : Type = 
-//     match op {
-//         _ => None,
-//     }
-// }
+fn binop_int(a : &Literal, b : &Literal, func : &dyn Fn(&i64, &i64) -> i64) -> Option<Literal> {
+    match a {
+        Literal::Int(x) => {
+            if let Literal::Int(y) = b {
+                Some(Literal::Int(func(x, y)))
+            } else {
+                None
+            }
+        },
+        _ => None,
+    }
+}
 
-// fn const_fold(num2const : &mut HashMap<i32, Literal>, value_expr : &ValueExpr, fold : bool) -> Option<Literal> {
-//     if fold {
-//         let args = &value_expr.args;
-//         let all_const = args.into_iter().map(|a| {
-//             match num2const.get(&a) {
-//                 Some(_) => true,
-//                 None => false,
-//             }
-//         }).fold(true, |acc, b| acc && b);
-//         if all_const {
-//             apply_fold(&value_expr.op_code, num2const.get(&value_expr.args[0]).unwrap(), 
-//                 num2const.get(&value_expr.args[1]))
-//         } else {
-//             None
-//         }
-//     } else {
-//         None
-//     }
-// }
+fn binop_float(a : &Literal, b : &Literal, func : &dyn Fn(&f64, &f64) -> f64) -> Option<Literal> {
+    match a {
+        Literal::Float(x) => {
+            if let Literal::Float(y) = b {
+                Some(Literal::Float(func(x, y)))
+            } else {
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
+fn binop_bool(a : &Literal, b : &Literal, func : &dyn Fn(&bool, &bool) -> bool) -> Option<Literal> {
+    match a {
+        Literal::Bool(x) => {
+            if let Literal::Bool(y) = b {
+                Some(Literal::Bool(func(x, y)))
+            } else {
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
+fn apply_fold(op : &String, a : &Literal, b : Option<&Literal>) -> Option<Literal> {
+    match op.to_string().as_str() {
+        "add"  => binop_int(a, b.unwrap(), &|a, b| a + b),
+        "mul"  => binop_int(a, b.unwrap(), &|a, b| a * b),
+        "sub"  => binop_int(a, b.unwrap(), &|a, b| a - b),
+        "div"  => binop_int(a, b.unwrap(), &|a, b| a / b),
+        "addf" => binop_float(a, b.unwrap(), &|a, b| a + b),
+        "mulf" => binop_float(a, b.unwrap(), &|a, b| a * b),
+        "subf" => binop_float(a, b.unwrap(), &|a, b| a - b),
+        "divf" => binop_float(a, b.unwrap(), &|a, b| a / b),
+        "eq"   => binop_bool(a, b.unwrap(), &|a, b| a == b),
+        "lt"   => binop_bool(a, b.unwrap(), &|a, b| a < b),
+        "gt"   => binop_bool(a, b.unwrap(), &|a, b| a > b),
+        "le"   => binop_bool(a, b.unwrap(), &|a, b| a <= b),
+        "ge"   => binop_bool(a, b.unwrap(), &|a, b| a >= b),
+        "and"  => binop_bool(a, b.unwrap(), &|a, b| *a && *b),
+        "or"   => binop_bool(a, b.unwrap(), &|a, b| *a || *b),
+        "not"  => 
+            match a {
+                Literal::Bool(x) => Some(Literal::Bool(!x)),
+                _ => None,
+            },
+        _ => None,
+    }
+}
+
+fn const_fold(num2const : &mut HashMap<i32, Literal>, value_expr : &ValueExpr, 
+    num : i32, fold : bool) -> Option<Literal> {
+    if fold {
+        let args = &value_expr.args;
+        let all_const = args.into_iter().map(|a| {
+            match num2const.get(&a) {
+                Some(_) => true,
+                None => {false},
+            }
+        }).fold(true, |acc, b| acc && b);
+        if all_const {
+            let c = apply_fold(&value_expr.op_code, num2const.get(&value_expr.args[0]).unwrap(),
+                num2const.get(&value_expr.args[1]));
+            if let Some(c) = c {
+                num2const.insert(num, c.clone());
+                Some(c)
+            } else {
+                None
+            }
+        } else {
+            let any_const = args.into_iter().map(|a| {
+                match num2const.get(&a) {
+                    Some(_) => true,
+                    None => {false},
+                }
+            }).fold(false, |acc, b| acc || b);
+            match value_expr.op_code.as_str() {
+                "eq" | "le" | "ge" 
+                    if value_expr.args[0] == value_expr.args[0] => Some(Literal::Bool(true)),
+                "and" | "or"
+                    if any_const => {
+                        let const_num = if num2const.contains_key(&value_expr.args[0]) {
+                            value_expr.args[0]
+                        } else {
+                            value_expr.args[1]
+                        };
+                        if let Literal::Bool(b) = num2const.get(&const_num).unwrap() {
+                            let bool_literal = (value_expr.op_code == "and" && !b)
+                                || (value_expr.op_code == "or" && *b);
+                            Some(Literal::Bool(bool_literal))
+                        } else {
+                            None
+                        } 
+                    },
+                _ => None,
+            }
+        }
+    } else {
+        None
+    }
+}
 
 fn lvn_pass(block : Block, prop : bool, comm : bool, fold : bool) -> Block {
     let mut new_block = Block {instrs : Vec::new()};
@@ -236,12 +335,12 @@ fn lvn_pass(block : Block, prop : bool, comm : bool, fold : bool) -> Block {
             AbstractCode::Instruction(instr) => 
                 match &instr {
                     AbstractInstruction::Value {op, args, dest, ..} if op != "call" => {
-                        // args.into_iter().for_each(|a| {
-                        //     match var2num.get(a) {
-                        //         None => println!("{}", a),
-                        //         _ => (),
-                        //     }
-                        // });
+                        args.into_iter().for_each(|a| {
+                            match var2num.get(a) {
+                                None => println!("{}", a),
+                                _ => (),
+                            }
+                        });
                         let mut arg_vals : Vec<i32> = args.into_iter()
                                                       .map(|a| *var2num.get(a).unwrap())
                                                       .collect();
@@ -251,25 +350,35 @@ fn lvn_pass(block : Block, prop : bool, comm : bool, fold : bool) -> Block {
                             _ => (),
                         }
                         let value_expr = ValueExpr::new(op.to_string(), arg_vals);
-                        // let c = const_fold(&mut num2const, &value_expr, fold);
                         if table.contains_expr(&value_expr, prop) {
-                            let (num, _) = table.lookup_expr(&value_expr, prop).unwrap();
+                            let (num, var) = table.lookup_expr(&value_expr, prop).unwrap();
+                            let c = const_fold(&mut num2const, &value_expr, num, fold);
                             var2num.insert(dest.to_string(), num);
-                            // match c {
-                            //     Some(constant) => new_block.instrs.push(const_instr(instr, constant)),
-                            //     None => new_block.instrs.push(copy_instr(instr, &var)),
-                            // }
+                            match c {
+                                Some(constant) => new_block.instrs.push(const_instr(instr, None, constant)),
+                                None => new_block.instrs.push(copy_instr(instr, &var)),
+                            }
                         } else {
                             let new_dest = get_dest(&table, dest, overwritten_later);
+                            let num = table.next_value();
+                            let c = const_fold(&mut num2const, &value_expr, num, fold);
                             let num = table.add_value(Some(value_expr), &new_dest);
                             var2num.insert(dest.to_string(), num);
-                            new_block.instrs.push(reform_instr(instr, Some(new_dest), &table, &var2num));
+                            match c {
+                                Some(constant) => {
+                                    var2num.insert(new_dest.to_string(), num);
+                                    new_block.instrs.push(const_instr(instr, Some(new_dest.to_string()), constant));
+                                },
+                                None => new_block.instrs.push(
+                                    reform_instr(instr, Some(new_dest), &table, &var2num)),
+                            }
                         }
                     },
-                    AbstractInstruction::Constant {dest, ..} => {
+                    AbstractInstruction::Constant {dest, value, ..} => {
                         let new_dest = get_dest(&table, dest, overwritten_later);
                         let num = table.add_value(None, &new_dest);
                         var2num.insert(dest.to_string(), num);
+                        num2const.insert(num, value.clone());
                         new_block.instrs.push(reform_instr(instr, Some(new_dest), &table, &var2num));
                     },
                     _ => new_block.instrs.push(reform_instr(instr, None, &table, &var2num)),

@@ -1,1 +1,1 @@
-command = "bril2json < {filename} | ../target/debug/df"
+command = "bril2json < {filename} | ../target/debug/df {args}"

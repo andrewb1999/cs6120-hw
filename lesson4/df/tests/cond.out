@@ -1,12 +1,4 @@
-b1:
-  in:  ∅
-  out: a
-left:
-  in:  a
-  out: a, c
-right:
-  in:  ∅
-  out: a, c
-end:
-  in:  a, c
-  out: ∅
+Block: b1, Declared Vars: []
+Block: left, Declared Vars: ["a", "b", "cond"]
+Block: right, Declared Vars: ["a", "b", "cond"]
+Block: end, Declared Vars: ["a", "b", "c", "cond"]

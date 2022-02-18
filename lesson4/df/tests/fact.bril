@@ -1,4 +1,4 @@
-# ARGS: live
+# ARGS: -l
 
 @main {
   result: int = const 1;

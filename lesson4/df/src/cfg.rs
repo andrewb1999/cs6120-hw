@@ -8,7 +8,7 @@ use std::iter::Iterator;
 pub struct Cfg {
     pub succ : HashMap<String, Vec<String>>,
     pub pred : HashMap<String, Vec<String>>,
-    pub blocks : IndexMap<String, Block>,
+    pub block_map : IndexMap<String, Block>,
 }
 
 fn fresh<'a>(seed : String, mut names : impl Iterator<Item=&'a String>) -> String {
@@ -131,13 +131,13 @@ fn add_edges(block_map : IndexMap<String, Block>) -> Cfg {
             }
         }
     }
-    cfg.blocks = block_map;
+    cfg.block_map = block_map;
     cfg
 }
 
 fn add_entry(mut cfg : Cfg) -> Cfg {
-    let (first_label, _) = cfg.blocks.get_index(0).unwrap();
-    let blocks : Vec<Block> = cfg.blocks.clone().into_values().collect();
+    let (first_label, _) = cfg.block_map.get_index(0).unwrap();
+    let blocks : Vec<Block> = cfg.block_map.clone().into_values().collect();
 
     let mut has_in_edge = false;
 
@@ -151,11 +151,11 @@ fn add_entry(mut cfg : Cfg) -> Cfg {
         }
     }
     if has_in_edge {
-        let new_label = fresh("entry".to_string(), cfg.blocks.keys());
-        let old_map : IndexMap<String, Block> = cfg.blocks;
-        cfg.blocks = IndexMap::new();
-        cfg.blocks.insert(new_label, Block::default());
-        cfg.blocks.extend(old_map);
+        let new_label = fresh("entry".to_string(), cfg.block_map.keys());
+        let old_map : IndexMap<String, Block> = cfg.block_map;
+        cfg.block_map = IndexMap::new();
+        cfg.block_map.insert(new_label, Block::default());
+        cfg.block_map.extend(old_map);
     }
     cfg
 }
@@ -168,7 +168,7 @@ pub fn form_cfg(blocks : Vec<Block>) -> Cfg {
 
 pub fn reassemble(cfg : Cfg) -> Vec<AbstractCode> {
     let mut instrs = Vec::new();
-    for (name, block) in cfg.blocks {
+    for (name, block) in cfg.block_map {
         instrs.push(AbstractCode::Label {label : name});
         instrs.extend(block.instrs);
     }

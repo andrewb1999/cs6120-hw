@@ -1,4 +1,4 @@
-# ARGS: live
+# ARGS: -l
 
 @main(cond: bool) {
   a: int = const 47;

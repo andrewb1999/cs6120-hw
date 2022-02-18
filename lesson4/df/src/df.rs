@@ -5,26 +5,6 @@ use crate::cfg::Cfg;
 use std::collections::{HashSet, HashMap};
 use std::hash::Hash;
 
-// #[derive(Clone)]
-// struct InstrLoc {
-//     loc : u64,
-//     instr : AbstractInstruction,
-// }
-
-// impl PartialEq for InstrLoc {
-//     fn eq(&self, other: &Self) -> bool {
-//         self.loc == other.loc
-//     }
-// } 
-
-// impl Eq for InstrLoc {}
-
-// impl Hash for InstrLoc {
-//     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-//         self.loc.hash(state);
-//     }
-// }
-
 trait Dataflow {
     type Item;
 
@@ -37,14 +17,14 @@ trait Dataflow {
     fn init(&self) -> HashSet<Self::Item>;
 }
 
-
 fn union<T>(sets : impl Iterator<Item=HashSet<T>>) -> HashSet<T>
     where
     T : Eq + Hash + Clone {
     sets.into_iter().fold(HashSet::new(), |mut acc, p| {acc.extend(p); acc})
 }
 
-fn df_analysis<T>(cfg : &Cfg, df : impl Dataflow<Item=T>) -> HashMap<String, HashSet<T>>
+fn df_analysis<T>(cfg : &Cfg, df : impl Dataflow<Item=T>) 
+    -> (HashMap<String, HashSet<T>>, HashMap<String, HashSet<T>>)
     where T : Eq + Hash + Clone {
     let forward = !df.is_reverse();
     let mut in_map : HashMap<String, HashSet<T>> = HashMap::new();
@@ -61,22 +41,16 @@ fn df_analysis<T>(cfg : &Cfg, df : impl Dataflow<Item=T>) -> HashMap<String, Has
         pred = &cfg.succ;
     }
 
-    let (name, _) = cfg.block_map.get_index(0).unwrap();
-    in_map.insert(name.to_string(), df.init());
+    if forward {
+        let (name, _) = cfg.block_map.get_index(0).unwrap();
+        in_map.insert(name.to_string(), df.init());
+    } else {
+        let (name, _) = cfg.block_map.last().unwrap();
+        in_map.insert(name.to_string(), df.init());
+    }
 
     for (name, _) in &cfg.block_map {
         out_map.insert(name.to_string(), df.init());
-    }
-
-    let mut in_edges;
-    let mut out_edges;
-
-    if forward {
-        in_edges = in_map;
-        out_edges = out_map;
-    } else {
-        in_edges = out_map;
-        out_edges = in_map;
     }
 
     let mut worklist = Vec::new();
@@ -87,16 +61,20 @@ fn df_analysis<T>(cfg : &Cfg, df : impl Dataflow<Item=T>) -> HashMap<String, Has
         let b = cfg.block_map.get(name).unwrap();
         let preds : &Vec<String> = pred.get(name).unwrap();
         let out_p : Vec<HashSet<T>>
-            = preds.into_iter().map(|p| out_edges.get(p).unwrap().clone()).collect();
+            = preds.into_iter().map(|p| out_map.get(p).unwrap().clone()).collect();
         let in_b = df.merge(out_p.into_iter());
-        in_edges.insert(name.to_string(), in_b);
-        let out_b = df.transfer(b, in_edges.get(name).unwrap());
-        if out_edges.get(name).unwrap() != &out_b {
+        in_map.insert(name.to_string(), in_b);
+        let out_b = df.transfer(b, in_map.get(name).unwrap());
+        if out_map.get(name).unwrap() != &out_b {
             worklist.extend(succ.get(name).unwrap());
         }
-        out_edges.insert(name.to_string(), out_b);
+        out_map.insert(name.to_string(), out_b);
     }
-    in_edges
+    if forward {
+        (in_map, out_map)
+    } else {
+        (out_map, in_map)
+    }
 }
 
 struct DefinedVars;
@@ -139,11 +117,15 @@ impl Dataflow for DefinedVars {
 }
 
 pub fn declared_vars(cfg : &Cfg) {
-    let in_map = df_analysis(cfg, DefinedVars);
+    let (in_map, out_map) = df_analysis(cfg, DefinedVars);
     for name in cfg.block_map.keys() {
-        let mut results : Vec<&String> = in_map.get(name).unwrap().into_iter().collect();
-        results.sort();
-        println!("Block: {name}, Declared Vars: {results:?}")
+        let mut ins : Vec<&String> = in_map.get(name).unwrap().into_iter().collect();
+        let mut outs : Vec<&String> = out_map.get(name).unwrap().into_iter().collect();
+        ins.sort();
+        outs.sort();
+        println!("{name}:");
+        println!("    in: {ins:?}");
+        println!("    out: {outs:?}");
     }
 }
 
@@ -176,7 +158,8 @@ impl LiveVars {
                         }
                     }
                 }
-                if let AbstractInstruction::Value {dest, ..} = instr {
+                if let AbstractInstruction::Value {dest, ..}
+                | AbstractInstruction::Constant {dest, ..} = instr {
                     defined.insert(dest);
                 }
             }
@@ -193,7 +176,7 @@ impl Dataflow for LiveVars {
     }
 
     fn transfer(&self, b : &Block, out_b : &HashSet<Self::Item>) -> HashSet<Self::Item> {
-        let mut set : HashSet<String> = out_b.clone();
+        let mut set : HashSet<String> = HashSet::new();
         set.extend(self.get_uses(b));
         let diff : HashSet<String> 
             = out_b.clone().difference(&self.get_def_vars(b)).map(|s| s.to_string()).collect();
@@ -211,10 +194,14 @@ impl Dataflow for LiveVars {
 }
 
 pub fn live_vars(cfg : &Cfg) {
-    let in_map = df_analysis(cfg, DefinedVars);
+    let (in_map, out_map) = df_analysis(cfg, LiveVars);
     for name in cfg.block_map.keys() {
-        let mut results : Vec<&String> = in_map.get(name).unwrap().into_iter().collect();
-        results.sort();
-        println!("Block: {name}, Live Vars: {results:?}")
+        let mut ins : Vec<&String> = in_map.get(name).unwrap().into_iter().collect();
+        let mut outs : Vec<&String> = out_map.get(name).unwrap().into_iter().collect();
+        ins.sort();
+        outs.sort();
+        println!("{name}:");
+        println!("    in: {ins:?}");
+        println!("    out: {outs:?}");
     }
 }

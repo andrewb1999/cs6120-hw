@@ -1,4 +1,12 @@
-Block: b1, Live Vars: []
-Block: left, Live Vars: ["a", "b"]
-Block: right, Live Vars: ["a", "b"]
-Block: end, Live Vars: ["a", "b", "c"]
+b1:
+    in: ["cond"]
+    out: ["a"]
+left:
+    in: ["a"]
+    out: ["a", "c"]
+right:
+    in: []
+    out: ["a", "c"]
+end:
+    in: ["a", "c"]
+    out: []

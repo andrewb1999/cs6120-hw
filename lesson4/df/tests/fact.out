@@ -1,4 +1,12 @@
-Block: b1, Live Vars: []
-Block: header, Live Vars: ["cond", "i", "one", "result", "zero"]
-Block: body, Live Vars: ["cond", "i", "one", "result", "zero"]
-Block: end, Live Vars: ["cond", "i", "one", "result", "zero"]
+b1:
+    in: []
+    out: ["i", "result"]
+header:
+    in: ["i", "result"]
+    out: ["i", "result"]
+body:
+    in: ["i", "result"]
+    out: ["i", "result"]
+end:
+    in: ["result"]
+    out: []

@@ -24,11 +24,11 @@ fn union<T>(sets : impl Iterator<Item=HashSet<T>>) -> HashSet<T>
 }
 
 fn df_analysis<T>(cfg : &Cfg, df : impl Dataflow<Item=T>) 
-    -> (HashMap<String, HashSet<T>>, HashMap<String, HashSet<T>>)
+    -> (HashMap<i32, HashSet<T>>, HashMap<i32, HashSet<T>>)
     where T : Eq + Hash + Clone {
     let forward = !df.is_reverse();
-    let mut in_map : HashMap<String, HashSet<T>> = HashMap::new();
-    let mut out_map : HashMap<String, HashSet<T>> = HashMap::new();
+    let mut in_map : HashMap<i32, HashSet<T>> = HashMap::new();
+    let mut out_map : HashMap<i32, HashSet<T>> = HashMap::new();
 
     let pred;
     let succ;
@@ -42,33 +42,33 @@ fn df_analysis<T>(cfg : &Cfg, df : impl Dataflow<Item=T>)
     }
 
     if forward {
-        let (name, _) = cfg.block_map.get_index(0).unwrap();
-        in_map.insert(name.to_string(), df.init());
+        let (num, _) = cfg.block_map.get_index(0).unwrap();
+        in_map.insert(*num, df.init());
     } else {
-        let (name, _) = cfg.block_map.last().unwrap();
-        in_map.insert(name.to_string(), df.init());
+        let (num, _) = cfg.block_map.last().unwrap();
+        in_map.insert(*num, df.init());
     }
 
-    for (name, _) in &cfg.block_map {
-        out_map.insert(name.to_string(), df.init());
+    for (num, _) in &cfg.block_map {
+        out_map.insert(*num, df.init());
     }
 
     let mut worklist = Vec::new();
     worklist.extend(cfg.block_map.keys());
 
     while !worklist.is_empty() {
-        let name = worklist.pop().unwrap();
-        let b = cfg.block_map.get(name).unwrap();
-        let preds : &Vec<String> = pred.get(name).unwrap();
+        let num = worklist.pop().unwrap();
+        let b = cfg.block_map.get(num).unwrap();
+        let preds = pred.get(num).unwrap();
         let out_p : Vec<HashSet<T>>
             = preds.into_iter().map(|p| out_map.get(p).unwrap().clone()).collect();
         let in_b = df.merge(out_p.into_iter());
-        in_map.insert(name.to_string(), in_b);
-        let out_b = df.transfer(b, in_map.get(name).unwrap());
-        if out_map.get(name).unwrap() != &out_b {
-            worklist.extend(succ.get(name).unwrap());
+        in_map.insert(*num, in_b);
+        let out_b = df.transfer(b, in_map.get(num).unwrap());
+        if out_map.get(num).unwrap() != &out_b {
+            worklist.extend(succ.get(num).unwrap());
         }
-        out_map.insert(name.to_string(), out_b);
+        out_map.insert(*num, out_b);
     }
     if forward {
         (in_map, out_map)
@@ -117,10 +117,11 @@ impl Dataflow for DefinedVars {
 }
 
 pub fn declared_vars(cfg : &Cfg) {
-    let (in_map, out_map) = df_analysis(cfg, DefinedVars);
-    for name in cfg.block_map.keys() {
-        let mut ins : Vec<&String> = in_map.get(name).unwrap().into_iter().collect();
-        let mut outs : Vec<&String> = out_map.get(name).unwrap().into_iter().collect();
+    let (mut in_map, mut out_map) = df_analysis(cfg, DefinedVars);
+    for num in cfg.block_map.keys() {
+        let name = cfg.name_map.get_by_left(num).unwrap();
+        let mut ins : Vec<String> = in_map.remove(num).unwrap().drain().collect();
+        let mut outs : Vec<String> = out_map.remove(num).unwrap().drain().collect();
         ins.sort();
         outs.sort();
         println!("{name}:");
@@ -194,10 +195,11 @@ impl Dataflow for LiveVars {
 }
 
 pub fn live_vars(cfg : &Cfg) {
-    let (in_map, out_map) = df_analysis(cfg, LiveVars);
-    for name in cfg.block_map.keys() {
-        let mut ins : Vec<&String> = in_map.get(name).unwrap().into_iter().collect();
-        let mut outs : Vec<&String> = out_map.get(name).unwrap().into_iter().collect();
+    let (mut in_map, mut out_map) = df_analysis(cfg, LiveVars);
+    for num in cfg.block_map.keys() {
+        let name = cfg.name_map.get_by_left(num).unwrap();
+        let mut ins : Vec<String> = in_map.remove(num).unwrap().drain().collect();
+        let mut outs : Vec<String> = out_map.remove(num).unwrap().drain().collect();
         ins.sort();
         outs.sort();
         println!("{name}:");

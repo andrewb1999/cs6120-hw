@@ -1,9 +1,21 @@
 use crate::cfg::*;
 use std::collections::{HashMap, HashSet};
 
+fn post_order_rec(cfg : &Cfg, node : i32, current : &mut Vec<i32>, visited : &mut HashSet<i32>) {
+    visited.insert(node);
+    let succ = cfg.succ.get(&node).unwrap();
+    for s in succ {
+        if !visited.contains(s) {
+            post_order_rec(cfg, *s, current, visited);
+        }
+    }
+    current.push(node);
+}
+
 fn get_reverse_post_order(cfg : &Cfg) -> Vec<i32> {
-    let vertices = cfg.block_map.keys().map(|a| *a).collect();
-    vertices
+    let vertices = &mut vec![];
+    post_order_rec(cfg, *cfg.block_map.first().unwrap().0, vertices, &mut HashSet::new());
+    vertices.into_iter().rev().map(|a| *a).collect()
 }
 
 pub fn find_dominators_num(cfg : &Cfg) -> HashMap<i32, HashSet<i32>> {

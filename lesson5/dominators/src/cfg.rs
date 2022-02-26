@@ -14,10 +14,15 @@ pub struct Cfg {
 }
 
 impl Cfg {
-    pub fn add_block(&mut self, name : String, block : Block) {
+    pub fn add_block(&mut self, name : String, block : Block) -> i32 {
         let num = self.name_map.len() as i32;
         self.name_map.insert(num, name);
         self.block_map.insert(num, block);
+        num
+    }
+    
+    pub fn add_pred(&mut self, num : i32, pred : i32) {
+        self.pred.get_mut(&num).unwrap().push(pred);
     }
 }
 
@@ -130,7 +135,7 @@ fn term_sucessors(instr : &AbstractCode) -> Option<&Vec<String>>{
 fn add_edges(block_map : IndexMap<String, Block>) -> Cfg {
     let mut cfg = Cfg::default();
     for (name, block) in block_map {
-        cfg.add_block(name, block)
+        cfg.add_block(name, block);
     }
     for num in cfg.block_map.keys() {
         cfg.pred.insert(*num, Vec::new());
@@ -149,8 +154,8 @@ fn add_edges(block_map : IndexMap<String, Block>) -> Cfg {
 }
 
 fn add_entry(mut cfg : Cfg) -> Cfg {
-    let (first_num, _) = cfg.block_map.get_index(0).unwrap();
-    let first_label = cfg.name_map.get_by_left(first_num).unwrap();
+    let (&first_num, _) = cfg.block_map.get_index(0).unwrap();
+    let first_label = cfg.name_map.get_by_left(&first_num).unwrap().to_string();
     let blocks : Vec<Block> = cfg.block_map.clone().into_values().collect();
 
     let mut has_in_edge = false;
@@ -159,7 +164,7 @@ fn add_entry(mut cfg : Cfg) -> Cfg {
         if let AbstractCode::Instruction(instr) = instr {
             match instr {
                 AbstractInstruction::Effect {labels, ..}
-                    if labels.contains(first_label) => has_in_edge = true,
+                    if labels.contains(&first_label) => has_in_edge = true,
                 _ => (),
             }
         }
@@ -169,8 +174,11 @@ fn add_entry(mut cfg : Cfg) -> Cfg {
             .map(|i| cfg.name_map.get_by_left(i).unwrap()));
         let old_map = cfg.block_map;
         cfg.block_map = IndexMap::new();
-        cfg.add_block(new_label, Block::default());
+        let num = cfg.add_block(new_label, Block::default());
         cfg.block_map.extend(old_map);
+        cfg.add_pred(first_num, num);
+        cfg.succ.insert(num, vec![*cfg.name_map.get_by_right(&first_label).unwrap()]);
+        cfg.pred.insert(num, Vec::new());
     }
     cfg
 }

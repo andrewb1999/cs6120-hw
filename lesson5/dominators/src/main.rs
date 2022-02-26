@@ -1,6 +1,7 @@
 use dominators::cfg::*;
 use dominators::form_blocks::*;
 use dominators::dominators::*;
+use dominators::test::validate_dominators;
 use bril_rs::load_abstract_program;
 use clap::Parser;
 
@@ -14,13 +15,14 @@ struct Args {
 
     #[clap(short, long)]
     frontier : bool,
-}
 
+    #[clap(short, long)]
+    validate : bool,
+}
 
 fn main() {
     let args = Args::parse();
     let mut program = load_abstract_program();
-    println!("{program}");
     for func in &mut program.functions {
         let blocks = form_blocks(&func);
         let cfg = form_cfg(blocks);
@@ -31,6 +33,13 @@ fn main() {
         if args.tree {
            let dom_tree = form_dom_tree(&cfg);
             print_dominator_tree(&dom_tree);
+        } else if args.frontier {
+            let frontier = get_dominance_frontier(&cfg);
+            print_dominance_frontier(&frontier);
+        } else if args.validate {
+            let doms = find_dominators_num(&cfg);
+            validate_dominators(&cfg, doms);
+            println!("Dominators are correct!");
         } else {
             let doms = find_dominators(&cfg);
             print_dominators(&doms);

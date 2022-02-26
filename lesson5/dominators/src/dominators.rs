@@ -1,13 +1,12 @@
 use crate::cfg::*;
 use std::collections::{HashMap, HashSet};
-use indextree::{Arena, NodeId, Node};
 
 fn get_reverse_post_order(cfg : &Cfg) -> Vec<i32> {
     let vertices = cfg.block_map.keys().map(|a| *a).collect();
     vertices
 }
 
-fn find_dominators_num(cfg : &Cfg) -> HashMap<i32, HashSet<i32>> {
+pub fn find_dominators_num(cfg : &Cfg) -> HashMap<i32, HashSet<i32>> {
     let mut dom : HashMap<i32, HashSet<i32>> = HashMap::new();
     let all_blocks : HashSet<i32> = cfg.block_map.keys().copied().collect();
     let (&first_num, _) = cfg.block_map.get_index(0).unwrap();
@@ -60,7 +59,7 @@ fn get_strict_doms(dom : &HashMap<i32, HashSet<i32>>) -> HashMap<i32, HashSet<i3
     dom
 }
 
-fn find_immediate_strict_doms(cfg : &Cfg) -> HashMap<i32, Option<i32>> {
+fn find_immediate_doms(cfg : &Cfg) -> HashMap<i32, Option<i32>> {
     let mut idom = HashMap::new();
     let dom = find_dominators_num(cfg);
     let sdom = get_strict_doms(&dom);
@@ -69,7 +68,7 @@ fn find_immediate_strict_doms(cfg : &Cfg) -> HashMap<i32, Option<i32>> {
         for a in doms {
             let mut imm = true;
             for d in doms {
-                imm &= !dom.get(d).unwrap().contains(a);
+                imm &= !sdom.get(d).unwrap().contains(a);
             }
             if imm {
                 v_idom = Some(*a);
@@ -82,43 +81,64 @@ fn find_immediate_strict_doms(cfg : &Cfg) -> HashMap<i32, Option<i32>> {
 
 #[derive(Default, Debug)]
 pub struct DomTree {
-    tree : Arena<String>,
-    num_to_id : HashMap<i32, NodeId>,
+    arena : Vec<DomNode>,
+    num_to_id : HashMap<i32, usize>,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct DomNode {
+    pub idx : usize,
+    pub label : String,
+    parent : Option<usize>,
+    children : Vec<usize>,
+}
+
+impl DomNode {
+    pub fn new(idx: usize, label: String) -> Self {
+        Self {idx, label, parent: None, children: vec![]}
+    }
 }
 
 impl DomTree {
-    pub fn new_node(&mut self, label : String, num : i32) {
-        let node_id = self.tree.new_node(label);
-        self.num_to_id.insert(num, node_id);
+    pub fn new_node(&mut self, label : String, num : i32) -> usize {
+        let idx = self.arena.len();
+        self.num_to_id.insert(num, idx);
+        self.arena.push(DomNode::new(idx, label));
+        idx
     }
 
-    pub fn get_node(&self, v : &i32) -> Option<&Node<String>> {
+    pub fn get_node(&self, v : &i32) -> Option<&DomNode> {
         if let Some(node_id) = self.num_to_id.get(v) {
-            self.tree.get(*node_id)
+            self.arena.get(*node_id)
         } else {
             None
         }
     }
 
-    fn get_node_id(&self, v : &i32) -> Option<&NodeId> {
+    fn get_num_id(&self, v : &i32) -> Option<&usize> {
         self.num_to_id.get(v)
     }
 
     pub fn add_child(&mut self, parent : &i32, child : &i32) {
-        let child_node = *self.get_node_id(child).unwrap();
-        let parent_node = self.get_node_id(parent).unwrap();
-        parent_node.append(child_node, &mut self.tree);
+        let child_idx = *self.get_num_id(child).unwrap();
+        let parent_idx = *self.get_num_id(parent).unwrap();
+        let child_node = self.arena.get_mut(child_idx).unwrap();
+        child_node.parent = Some(parent_idx);
+        let parent_node = self.arena.get_mut(parent_idx).unwrap();
+        parent_node.children.push(child_idx);
     }
 }
 
 pub fn form_dom_tree(cfg : &Cfg) -> DomTree {
-    let imm_strict_dom = find_immediate_strict_doms(cfg);
+    let idom = find_immediate_doms(cfg);
     let mut tree = DomTree::default();
-    for (v, _) in &imm_strict_dom {
+    let mut idom : Vec<_> = idom.into_iter().collect();
+    idom.sort_by_key(|(v,_)| *v);
+    for (v, _) in &idom {
         let label = cfg.name_map.get_by_left(v).unwrap();
         tree.new_node(label.to_string(), *v);
     }
-    for (v, parent) in imm_strict_dom {
+    for (v, parent) in idom {
         if let Some(p) = parent {
             tree.add_child(&p, &v);
         }
@@ -126,27 +146,52 @@ pub fn form_dom_tree(cfg : &Cfg) -> DomTree {
     tree
 }
 
-pub fn get_dominance_frontier(cfg : &Cfg) {
+pub fn get_dominance_frontier(cfg : &Cfg) -> HashMap<String, HashSet<String>> {
     let dom = find_dominators_num(cfg);
     let sdom = get_strict_doms(&dom);
     let mut frontier : HashMap<i32, HashSet<i32>> = HashMap::new();
-    for (a, _) in dom {
-        frontier.insert(a, HashSet::new());
+    for (a, _) in &dom {
+        let mut set_a = HashSet::new();
         for (b, d) in &sdom {
-            if !d.contains(b) {
-
+            if !d.contains(a) {
+                for p in cfg.pred.get(b).unwrap() {
+                    if dom.get(p).unwrap().contains(&a) {
+                        set_a.insert(*b);
+                    }
+                }
             }
         }
+        frontier.insert(*a, set_a);
+    }
+    convert_doms_to_string(cfg, frontier)
+}
+
+pub fn print_dominance_frontier(frontier : &HashMap<String, HashSet<String>>) {
+    println!("Frontier");
+    println!("--------------------------------");
+    let mut frontier = frontier.into_iter().collect::<Vec<_>>();
+    frontier.sort_by_key(|(n, _)| *n);
+    for (node, front) in  frontier {
+        print!("{node}: ");
+        let mut front = front.into_iter().collect::<Vec<_>>();
+        front.sort();
+        println!("{front:?}");
     }
 }
 
 pub fn print_dominator_tree(tree : &DomTree) {
-    println!("{:?}", tree.tree)
+    println!("Tree");
+    println!("--------------------------------");
+    for node in &tree.arena {
+        println!("{node:?}")
+    }
 }
 
 pub fn print_dominators(doms : &HashMap<String, HashSet<String>>) {
     let mut doms : Vec<_> = doms.into_iter().collect();
     doms.sort_by_key(|d| d.0);
+    println!("Dominators");
+    println!("--------------------------------");
     for (name, dom) in doms {
         println!("{name}: {dom:?}")
     }

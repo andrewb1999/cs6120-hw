@@ -1,0 +1,1 @@
+command = "bril2json < {filename} | ../target/debug/ssa {args} | bril2txt"

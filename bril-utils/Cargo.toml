@@ -1,0 +1,13 @@
+[package]
+name = "bril-utils"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+indexmap = "1.8.0"
+bimap = "0.6.2"
+
+[dependencies.bril-rs]
+git = "https://github.com/sampsyo/bril"
+package = "bril-rs"
+features = ["ssa", "memory", "float", "speculate"]

@@ -3,9 +3,9 @@ name = "ssa"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-name = "ssa"
-path = "src/lib.rs"
+# [lib]
+# name = "ssa"
+# path = "src/lib.rs"
 
 [dependencies]
 clap = {version = "3.0.14", features = ["derive"]}

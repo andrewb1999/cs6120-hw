@@ -27,4 +27,5 @@ fn main() {
             to_ssa(func);
         }
     }
+    output_abstract_program(&program);
 }

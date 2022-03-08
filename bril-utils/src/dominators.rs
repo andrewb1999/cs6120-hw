@@ -101,8 +101,8 @@ pub struct DomTree {
 pub struct DomNode {
     pub idx : usize,
     pub label : String,
-    parent : Option<usize>,
-    children : Vec<usize>,
+    pub parent : Option<usize>,
+    pub children : Vec<usize>,
 }
 
 impl DomNode {
@@ -158,7 +158,7 @@ pub fn form_dom_tree(cfg : &Cfg) -> DomTree {
     tree
 }
 
-pub fn get_dominance_frontier(cfg : &Cfg) -> HashMap<String, HashSet<String>> {
+pub fn get_dominance_frontier_num(cfg : &Cfg) -> HashMap<i32, HashSet<i32>> {
     let dom = find_dominators_num(cfg);
     let sdom = get_strict_doms(&dom);
     let mut frontier : HashMap<i32, HashSet<i32>> = HashMap::new();
@@ -175,6 +175,11 @@ pub fn get_dominance_frontier(cfg : &Cfg) -> HashMap<String, HashSet<String>> {
         }
         frontier.insert(*a, set_a);
     }
+    frontier
+}
+
+pub fn get_dominance_frontier(cfg : &Cfg) -> HashMap<String, HashSet<String>> {
+    let frontier = get_dominance_frontier_num(cfg);
     convert_doms_to_string(cfg, frontier)
 }
 

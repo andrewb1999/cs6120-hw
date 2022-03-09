@@ -179,6 +179,13 @@ fn add_entry(mut cfg : Cfg) -> Cfg {
         cfg.add_pred(first_num, num);
         cfg.succ.insert(num, vec![*cfg.name_map.get_by_right(&first_label).unwrap()]);
         cfg.pred.insert(num, Vec::new());
+        let instr = AbstractCode::Instruction(
+            AbstractInstruction::Effect {
+            op : "jmp".to_string(), 
+            args : vec![], 
+            funcs : vec![],
+            labels : vec![first_label.to_string()]});
+        cfg.block_map.get_index_mut(0).unwrap().1.instrs.push(instr);
     }
     cfg
 }

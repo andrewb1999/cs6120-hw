@@ -1,2 +1,6 @@
-benchmark,baseline,opt
-spectral-norm,1.148,1.077
+benchmark,baseline,opt,percent speedup
+spectral-norm,1.148,1.077,6.2
+fannkuch-redux,6.206,6.189,0.3
+binary-trees,9.016,8.936,0.9
+fasta,0.163,0.160,1.8
+mandelbrot,0.189,0.193,-2.0

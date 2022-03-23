@@ -1,0 +1,1 @@
+command = "/opt/llvm/bin/clang-13 -O0 -flegacy-pass-manager -Xclang -disable-O0-optnone -Xclang -load -Xclang ../build/mem2reg/libmem2regPass.so {filename}"

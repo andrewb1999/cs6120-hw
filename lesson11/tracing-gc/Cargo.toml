@@ -1,0 +1,31 @@
+[package]
+name = "briligc"
+version = "0.1.0"
+authors = ["Andrew Butt"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[build-dependencies]
+clap         = { version = "3.0", features = ["derive"] }
+clap_complete= "3.0"
+
+[dependencies]
+thiserror    = "1.0"
+clap         = { version = "3.0", features = ["derive"] }
+fxhash       = "0.2"
+mimalloc     = "0.1"
+
+[dependencies.bril-rs]
+git = "https://github.com/sampsyo/bril"
+package = "bril-rs"
+features = ["ssa", "memory", "float", "speculate"]
+
+[dependencies.bril2json]
+git = "https://github.com/sampsyo/bril"
+package = "bril2json"
+
+[profile.release]
+# this can shave off a few ms but doubles the build time so it's not really worth it
+# codegen-units = 1
+lto = true
+panic = "abort"

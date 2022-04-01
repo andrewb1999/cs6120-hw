@@ -6,77 +6,191 @@ use crate::error::{InterpError, PositionalInterpError};
 use bril_rs::Instruction;
 
 use fxhash::FxHashMap;
-
 use mimalloc::MiMalloc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-struct Environment {
-  env: Vec<Value>,
+#[derive(Debug)]
+struct Scope {
+    vars: Vec<Value>
 }
 
-impl Environment {
+impl Scope {
   #[inline(always)]
   pub fn new(size: u32) -> Self {
     Self {
-      env: vec![Value::default(); size as usize],
+      vars: vec![Value::default(); size as usize],
     }
   }
   #[inline(always)]
   pub fn get(&self, ident: &u32) -> &Value {
     // A bril program is well formed when, dynamically, every variable is defined before its use.
     // If this is violated, this will return Value::Uninitialized and the whole interpreter will come crashing down.
-    self.env.get(*ident as usize).unwrap()
+    self.vars.get(*ident as usize).unwrap()
   }
   #[inline(always)]
   pub fn set(&mut self, ident: u32, val: Value) {
-    self.env[ident as usize] = val;
+    self.vars[ident as usize] = val;
   }
 }
 
-// todo: This is basically a copy of the heap implement in brili and we could probably do something smarter. This currently isn't that worth it to optimize because most benchmarks do not use the memory extension nor do they run for very long. You (the reader in the future) may be working with bril programs that you would like to speed up that extensively use the bril memory extension. In that case, it would be worth seeing how to implement Heap without a map based memory. Maybe try to re-implement malloc for a large Vec<Value>?
+#[derive(Debug)]
+struct Environment {
+  env: Vec<Scope>
+}
+
+impl Environment {
+  #[inline(always)]
+  pub fn new(initial_scope: Scope) -> Self {
+    Self {
+      env: vec![initial_scope],
+    }
+  }
+
+  #[inline(always)]
+  pub fn get_current_scope_mut(&mut self) -> &mut Scope {
+    self.env.last_mut().unwrap()
+  }
+
+  #[inline(always)]
+  pub fn get_current_scope(&self) -> &Scope {
+    self.env.last().unwrap()
+  }
+
+  #[inline(always)]
+  pub fn append(&mut self, scope: Scope) {
+    self.env.push(scope);
+  }
+
+  #[inline(always)]
+  pub fn pop(&mut self) {
+    self.env.pop();
+  }
+}
+
+const HEAP_SIZE: usize = 1000000;
+const INITIAL_GC_LIMIT: i64 = 16;
+const GC_GROWTH_FACTOR: i64 = 2;
+
 struct Heap {
-  memory: FxHashMap<usize, Vec<Value>>,
-  base_num_counter: usize,
+  memory: Vec<Value>,
+  size_map: FxHashMap<usize, i64>,
+  base_ptr: usize,
+  is_top: bool,
+  gc_limit: i64,
 }
 
 impl Default for Heap {
-  fn default() -> Self {
-    Self {
-      memory: FxHashMap::with_capacity_and_hasher(20, fxhash::FxBuildHasher::default()),
-      base_num_counter: 0,
+    fn default() -> Self {
+        Self { 
+            memory: vec![Value::default(); HEAP_SIZE], 
+            size_map: FxHashMap::default(),
+            base_ptr: 0,
+            is_top: true,
+            gc_limit: INITIAL_GC_LIMIT,
+        }
     }
-  }
 }
 
 impl Heap {
   #[inline(always)]
-  fn is_empty(&self) -> bool {
-    self.memory.is_empty()
+  fn should_run_gc(&mut self, amount : i64) -> bool {
+      if amount + self.allocated_size() >= self.gc_limit {
+        self.gc_limit *= GC_GROWTH_FACTOR;
+        true
+      } else {
+        false
+      }
+  }
+
+  fn flip(&mut self) {
+      if self.is_top {
+          self.base_ptr = HEAP_SIZE / 2;
+      } else {
+          self.base_ptr = 0;
+      }
+      self.is_top = !self.is_top;
+  }
+
+  fn clear(&mut self) {
+      if self.is_top {
+          for i in (HEAP_SIZE / 2)..HEAP_SIZE {
+              *self.memory.get_mut(i).unwrap() = Value::default();
+          }
+      } else {
+          for i in 0..(HEAP_SIZE / 2) {
+              *self.memory.get_mut(i).unwrap() = Value::default();
+          }
+      }
+  }
+
+  fn process_field(&mut self, fld : &Value) -> Option<Value> {
+      if let Value::Pointer(from_ref) = fld {
+          let size = self.size_map.remove(&from_ref.base);
+          if let Some(s) = size {
+              let to_ref = self.alloc(s).unwrap();
+              for i in 0..s {
+                  let from = self.memory.get(i as usize + from_ref.base).unwrap().clone();
+                  let to = self.memory.get_mut(i as usize + to_ref.base).unwrap();
+                  *to = from;
+              }
+              self.size_map.insert(to_ref.base, s);
+              return Some(Value::Pointer(Pointer {base: to_ref.base, offset: from_ref.offset}))
+          }
+      }
+      None
   }
 
   #[inline(always)]
-  const fn should_run_gc(&self) -> bool {
-    false
+  fn gc(&mut self, value_store: &mut Environment) {
+      self.flip();
+      let mut scan = self.base_ptr;
+      for scope in &mut value_store.env {
+          for root in &mut scope.vars {
+              if let Some(ptr) = self.process_field(root) {
+                  *root = ptr;
+              }
+          }
+      }
+      while scan != self.base_ptr {
+        let elem = self.memory.get(scan).unwrap();
+        scan = scan + *self.size_map.get(&scan).unwrap() as usize;
+        if let Value::Pointer(p) = elem {
+            let base = p.base;
+            let size = self.size_map.get(&p.base);
+            if let Some(s) = size {
+                for i in base..(base + *s as usize) {
+                    let fld = self.memory.get(i).unwrap().clone();
+                    if let Some(ptr) = self.process_field(&fld) {
+                        let fld = self.memory.get_mut(i).unwrap();
+                        *fld = ptr;
+                    }
+                }
+            }
+        }
+      }
+      self.clear();
+  }
+
+  const fn allocated_size(&self) -> i64 {
+      if self.is_top {
+          self.base_ptr as i64
+      } else {
+          (self.base_ptr - HEAP_SIZE / 2) as i64
+      }
   }
 
   #[inline(always)]
-  fn gc(&self, value_store: &Environment) {
-    
-  }
-
-  #[inline(always)]
-  fn alloc(&mut self, amount: i64) -> Result<Value, InterpError> {
-    if amount < 0 {
+  fn alloc(&mut self, amount: i64) -> Result<Pointer, InterpError> {
+    if amount < 0 || amount > (HEAP_SIZE / 2) as i64 - self.allocated_size() {
       return Err(InterpError::CannotAllocSize(amount));
     }
-    let base = self.base_num_counter;
-    self.base_num_counter += 1;
-    self
-      .memory
-      .insert(base, vec![Value::default(); amount as usize]);
-    Ok(Value::Pointer(Pointer { base, offset: 0 }))
+
+    let base = self.base_ptr;
+    self.size_map.insert(base, amount);
+    self.base_ptr += amount as usize;
+    Ok(Pointer { base, offset: 0 })
   }
 
   #[inline(always)]
@@ -86,9 +200,10 @@ impl Heap {
 
   #[inline(always)]
   fn write(&mut self, key: &Pointer, val: Value) -> Result<(), InterpError> {
-    match self.memory.get_mut(&key.base) {
-      Some(vec) if vec.len() > (key.offset as usize) && key.offset >= 0 => {
-        vec[key.offset as usize] = val;
+    let ptr : usize = key.base + key.offset as usize;
+    match self.memory.get_mut(ptr) {
+      Some(loc) if key.offset >= 0 => {
+        *loc = val;
         Ok(())
       }
       Some(_) | None => Err(InterpError::InvalidMemoryAccess(key.base, key.offset)),
@@ -97,10 +212,10 @@ impl Heap {
 
   #[inline(always)]
   fn read(&self, key: &Pointer) -> Result<&Value, InterpError> {
+    let ptr : usize = key.base + key.offset as usize;
     self
-      .memory
-      .get(&key.base)
-      .and_then(|vec| vec.get(key.offset as usize))
+    .memory
+      .get(ptr)
       .ok_or(InterpError::InvalidMemoryAccess(key.base, key.offset))
       .and_then(|val| match val {
         Value::Uninitialized => Err(InterpError::UsingUninitializedMemory),
@@ -111,7 +226,7 @@ impl Heap {
 
 #[inline(always)]
 fn get_value<'a>(vars: &'a Environment, index: usize, args: &[u32]) -> &'a Value {
-  vars.get(&args[index])
+  vars.get_current_scope().get(&args[index])
 }
 
 #[inline(always)]
@@ -119,7 +234,7 @@ fn get_arg<'a, T>(vars: &'a Environment, index: usize, args: &[u32]) -> T
 where
   T: From<&'a Value>,
 {
-  T::from(vars.get(&args[index]))
+  T::from(vars.get_current_scope().get(&args[index]))
 }
 
 #[derive(Debug, Clone)]
@@ -255,122 +370,125 @@ fn execute_value_op<'a, T: std::io::Write>(
     Add => {
       let arg0 = get_arg::<i64>(value_store, 0, args);
       let arg1 = get_arg::<i64>(value_store, 1, args);
-      value_store.set(dest, Value::Int(arg0.wrapping_add(arg1)));
+      value_store.get_current_scope_mut().set(dest, Value::Int(arg0.wrapping_add(arg1)));
     }
     Mul => {
       let arg0 = get_arg::<i64>(value_store, 0, args);
       let arg1 = get_arg::<i64>(value_store, 1, args);
-      value_store.set(dest, Value::Int(arg0.wrapping_mul(arg1)));
+      value_store.get_current_scope_mut().set(dest, Value::Int(arg0.wrapping_mul(arg1)));
     }
     Sub => {
       let arg0 = get_arg::<i64>(value_store, 0, args);
       let arg1 = get_arg::<i64>(value_store, 1, args);
-      value_store.set(dest, Value::Int(arg0.wrapping_sub(arg1)));
+      value_store.get_current_scope_mut().set(dest, Value::Int(arg0.wrapping_sub(arg1)));
     }
     Div => {
       let arg0 = get_arg::<i64>(value_store, 0, args);
       let arg1 = get_arg::<i64>(value_store, 1, args);
-      value_store.set(dest, Value::Int(arg0.wrapping_div(arg1)));
+      value_store.get_current_scope_mut().set(dest, Value::Int(arg0.wrapping_div(arg1)));
     }
     Eq => {
       let arg0 = get_arg::<i64>(value_store, 0, args);
       let arg1 = get_arg::<i64>(value_store, 1, args);
-      value_store.set(dest, Value::Bool(arg0 == arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(arg0 == arg1));
     }
     Lt => {
       let arg0 = get_arg::<i64>(value_store, 0, args);
       let arg1 = get_arg::<i64>(value_store, 1, args);
-      value_store.set(dest, Value::Bool(arg0 < arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(arg0 < arg1));
     }
     Gt => {
       let arg0 = get_arg::<i64>(value_store, 0, args);
       let arg1 = get_arg::<i64>(value_store, 1, args);
-      value_store.set(dest, Value::Bool(arg0 > arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(arg0 > arg1));
     }
     Le => {
       let arg0 = get_arg::<i64>(value_store, 0, args);
       let arg1 = get_arg::<i64>(value_store, 1, args);
-      value_store.set(dest, Value::Bool(arg0 <= arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(arg0 <= arg1));
     }
     Ge => {
       let arg0 = get_arg::<i64>(value_store, 0, args);
       let arg1 = get_arg::<i64>(value_store, 1, args);
-      value_store.set(dest, Value::Bool(arg0 >= arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(arg0 >= arg1));
     }
     Not => {
       let arg0 = get_arg::<bool>(value_store, 0, args);
-      value_store.set(dest, Value::Bool(!arg0));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(!arg0));
     }
     And => {
       let arg0 = get_arg::<bool>(value_store, 0, args);
       let arg1 = get_arg::<bool>(value_store, 1, args);
-      value_store.set(dest, Value::Bool(arg0 && arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(arg0 && arg1));
     }
     Or => {
       let arg0 = get_arg::<bool>(value_store, 0, args);
       let arg1 = get_arg::<bool>(value_store, 1, args);
-      value_store.set(dest, Value::Bool(arg0 || arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(arg0 || arg1));
     }
     Id => {
       let src = get_value(value_store, 0, args).clone();
-      value_store.set(dest, src);
+      value_store.get_current_scope_mut().set(dest, src);
     }
     Fadd => {
       let arg0 = get_arg::<f64>(value_store, 0, args);
       let arg1 = get_arg::<f64>(value_store, 1, args);
-      value_store.set(dest, Value::Float(arg0 + arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Float(arg0 + arg1));
     }
     Fmul => {
       let arg0 = get_arg::<f64>(value_store, 0, args);
       let arg1 = get_arg::<f64>(value_store, 1, args);
-      value_store.set(dest, Value::Float(arg0 * arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Float(arg0 * arg1));
     }
     Fsub => {
       let arg0 = get_arg::<f64>(value_store, 0, args);
       let arg1 = get_arg::<f64>(value_store, 1, args);
-      value_store.set(dest, Value::Float(arg0 - arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Float(arg0 - arg1));
     }
     Fdiv => {
       let arg0 = get_arg::<f64>(value_store, 0, args);
       let arg1 = get_arg::<f64>(value_store, 1, args);
-      value_store.set(dest, Value::Float(arg0 / arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Float(arg0 / arg1));
     }
     Feq => {
       let arg0 = get_arg::<f64>(value_store, 0, args);
       let arg1 = get_arg::<f64>(value_store, 1, args);
-      value_store.set(dest, Value::Bool(arg0 == arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(arg0 == arg1));
     }
     Flt => {
       let arg0 = get_arg::<f64>(value_store, 0, args);
       let arg1 = get_arg::<f64>(value_store, 1, args);
-      value_store.set(dest, Value::Bool(arg0 < arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(arg0 < arg1));
     }
     Fgt => {
       let arg0 = get_arg::<f64>(value_store, 0, args);
       let arg1 = get_arg::<f64>(value_store, 1, args);
-      value_store.set(dest, Value::Bool(arg0 > arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(arg0 > arg1));
     }
     Fle => {
       let arg0 = get_arg::<f64>(value_store, 0, args);
       let arg1 = get_arg::<f64>(value_store, 1, args);
-      value_store.set(dest, Value::Bool(arg0 <= arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(arg0 <= arg1));
     }
     Fge => {
       let arg0 = get_arg::<f64>(value_store, 0, args);
       let arg1 = get_arg::<f64>(value_store, 1, args);
-      value_store.set(dest, Value::Bool(arg0 >= arg1));
+      value_store.get_current_scope_mut().set(dest, Value::Bool(arg0 >= arg1));
     }
     Call => {
       let callee_func = prog
         .get(&funcs[0])
         .ok_or_else(|| InterpError::FuncNotFound(funcs[0].clone()))?;
 
-      let next_env = make_func_args(callee_func, args, value_store);
+      make_func_args(callee_func, args, value_store);
 
-      value_store.set(
+      let res = execute(prog, callee_func, out, value_store, heap, instruction_count)?.unwrap();
+      value_store.pop();
+
+      value_store.get_current_scope_mut().set(
         dest,
-        execute(prog, callee_func, out, next_env, heap, instruction_count)?.unwrap(),
-      )
+        res,
+      );
     }
     Phi => {
       if last_label.is_none() {
@@ -380,29 +498,29 @@ fn execute_value_op<'a, T: std::io::Write>(
           .iter()
           .position(|l| l == last_label.unwrap())
           .ok_or_else(|| InterpError::PhiMissingLabel(last_label.unwrap().to_string()))
-          .map(|i| value_store.get(args.get(i).unwrap()))?
+          .map(|i| value_store.get_current_scope_mut().get(args.get(i).unwrap()))?
           .clone();
-        value_store.set(dest, arg);
+        value_store.get_current_scope_mut().set(dest, arg);
       }
     }
     Alloc => {
-      if heap.should_run_gc() {
+      let arg0 = get_arg::<i64>(value_store, 0, args);
+      if heap.should_run_gc(arg0) {
         heap.gc(value_store);
       }
-      let arg0 = get_arg::<i64>(value_store, 0, args);
       let res = heap.alloc(arg0)?;
-      value_store.set(dest, res)
+      value_store.get_current_scope_mut().set(dest, Value::Pointer(res))
     }
     Load => {
       let arg0 = get_arg::<&Pointer>(value_store, 0, args);
       let res = heap.read(arg0)?;
-      value_store.set(dest, res.clone())
+      value_store.get_current_scope_mut().set(dest, res.clone())
     }
     PtrAdd => {
       let arg0 = get_arg::<&Pointer>(value_store, 0, args);
       let arg1 = get_arg::<i64>(value_store, 1, args);
       let res = Value::Pointer(arg0.add(arg1));
-      value_store.set(dest, res)
+      value_store.get_current_scope_mut().set(dest, res)
     }
   }
   Ok(())
@@ -413,20 +531,20 @@ fn execute_value_op<'a, T: std::io::Write>(
 fn make_func_args<'a>(
   callee_func: &'a BBFunction,
   args: &[u32],
-  vars: &Environment,
-) -> Environment {
+  vars: &mut Environment,
+) {
   // todo: Having to allocate a new environment on each function call probably makes small function calls very heavy weight. This could be interesting to profile and see if old environments can be reused instead of being deallocated and reallocated. Maybe there is another way to sometimes avoid this allocation.
-  let mut next_env = Environment::new(callee_func.num_of_vars);
+  let mut new_scope = Scope::new(callee_func.num_of_vars);
 
   args
     .iter()
     .zip(callee_func.args_as_nums.iter())
     .for_each(|(arg_name, expected_arg)| {
-      let arg = vars.get(arg_name);
-      next_env.set(*expected_arg, arg.clone());
+      let arg = vars.get_current_scope_mut().get(arg_name);
+      new_scope.set(*expected_arg, arg.clone());
     });
-
-  next_env
+    
+  vars.append(new_scope);
 }
 
 // todo do this with less function arguments
@@ -439,7 +557,7 @@ fn execute_effect_op<'a, T: std::io::Write>(
   funcs: &[String],
   curr_block: &BasicBlock,
   out: &mut T,
-  value_store: &Environment,
+  value_store: &mut Environment,
   heap: &mut Heap,
   next_block_idx: &mut Option<usize>,
   instruction_count: &mut u32,
@@ -467,7 +585,7 @@ fn execute_effect_op<'a, T: std::io::Write>(
         "{}",
         args
           .iter()
-          .map(|a| value_store.get(a).to_string())
+          .map(|a| value_store.get_current_scope_mut().get(a).to_string())
           .collect::<Vec<String>>()
           .join(" ")
       )
@@ -480,9 +598,11 @@ fn execute_effect_op<'a, T: std::io::Write>(
         .get(&funcs[0])
         .ok_or_else(|| InterpError::FuncNotFound(funcs[0].clone()))?;
 
-      let next_env = make_func_args(callee_func, args, value_store);
+      make_func_args(callee_func, args, value_store);
 
-      execute(prog, callee_func, out, next_env, heap, instruction_count)?;
+      execute(prog, callee_func, out, value_store, heap, instruction_count)?;
+
+      value_store.pop();
     }
     Store => {
       let arg0 = get_arg::<&Pointer>(value_store, 0, args);
@@ -502,7 +622,7 @@ fn execute<'a, T: std::io::Write>(
   prog: &'a BBProgram,
   func: &'a BBFunction,
   out: &mut T,
-  mut value_store: Environment,
+  value_store: &mut Environment,
   heap: &mut Heap,
   instruction_count: &mut u32,
 ) -> Result<Option<Value>, PositionalInterpError> {
@@ -540,16 +660,16 @@ fn execute<'a, T: std::io::Write>(
           if const_type == &bril_rs::Type::Float {
             match value {
               bril_rs::Literal::Int(i) => {
-                value_store.set(numified_code.dest.unwrap(), Value::Float(*i as f64))
+                value_store.get_current_scope_mut().set(numified_code.dest.unwrap(), Value::Float(*i as f64))
               }
               bril_rs::Literal::Float(f) => {
-                value_store.set(numified_code.dest.unwrap(), Value::Float(*f))
+                value_store.get_current_scope_mut().set(numified_code.dest.unwrap(), Value::Float(*f))
               }
               // this is safe because we type check this beforehand
               bril_rs::Literal::Bool(_) => unsafe { unreachable_unchecked() },
             }
           } else {
-            value_store.set(numified_code.dest.unwrap(), Value::from(value));
+            value_store.get_current_scope_mut().set(numified_code.dest.unwrap(), Value::from(value));
           };
         }
         Instruction::Value {
@@ -569,7 +689,7 @@ fn execute<'a, T: std::io::Write>(
             labels,
             funcs,
             out,
-            &mut value_store,
+            value_store,
             heap,
             last_label,
             instruction_count,
@@ -591,7 +711,7 @@ fn execute<'a, T: std::io::Write>(
             funcs,
             curr_block,
             out,
-            &value_store,
+            value_store,
             heap,
             &mut next_block_idx,
             instruction_count,
@@ -632,7 +752,7 @@ fn parse_args(
                 (*inputs.get(index).unwrap()).to_string(),
               ))
             }
-            Ok(b) => env.set(*arg_as_num, Value::Bool(b)),
+            Ok(b) => env.get_current_scope_mut().set(*arg_as_num, Value::Bool(b)),
           };
           Ok(())
         }
@@ -644,7 +764,7 @@ fn parse_args(
                 (*inputs.get(index).unwrap()).to_string(),
               ))
             }
-            Ok(i) => env.set(*arg_as_num, Value::Int(i)),
+            Ok(i) => env.get_current_scope_mut().set(*arg_as_num, Value::Int(i)),
           };
           Ok(())
         }
@@ -656,7 +776,7 @@ fn parse_args(
                 (*inputs.get(index).unwrap()).to_string(),
               ))
             }
-            Ok(f) => env.set(*arg_as_num, Value::Float(f)),
+            Ok(f) => env.get_current_scope_mut().set(*arg_as_num, Value::Float(f)),
           };
           Ok(())
         }
@@ -684,10 +804,11 @@ pub fn execute_main<T: std::io::Write>(
       .map_err(|e| e.add_pos(main_func.pos));
   }
 
-  let env = Environment::new(main_func.num_of_vars);
+  let scope = Scope::new(main_func.num_of_vars);
+  let env = Environment::new(scope);
   let mut heap = Heap::default();
 
-  let value_store = parse_args(env, &main_func.args, &main_func.args_as_nums, input_args)
+  let mut value_store = parse_args(env, &main_func.args, &main_func.args_as_nums, input_args)
     .map_err(|e| e.add_pos(main_func.pos))?;
 
   let mut instruction_count = 0;
@@ -696,14 +817,14 @@ pub fn execute_main<T: std::io::Write>(
     prog,
     main_func,
     &mut out,
-    value_store,
+    &mut value_store,
     &mut heap,
     &mut instruction_count,
   )?;
 
-  if !heap.is_empty() {
-    return Err(InterpError::MemLeak).map_err(|e| e.add_pos(main_func.pos));
-  }
+  // if !heap.is_empty() {
+  //   return Err(InterpError::MemLeak).map_err(|e| e.add_pos(main_func.pos));
+  // }
 
   if profiling {
     eprintln!("total_dyn_inst: {instruction_count}");

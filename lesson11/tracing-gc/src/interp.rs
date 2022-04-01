@@ -79,6 +79,7 @@ struct Heap {
   base_ptr: usize,
   is_top: bool,
   gc_limit: i64,
+  forward_map: FxHashMap<usize, usize>,
 }
 
 impl Default for Heap {
@@ -89,6 +90,7 @@ impl Default for Heap {
             base_ptr: 0,
             is_top: true,
             gc_limit: INITIAL_GC_LIMIT,
+            forward_map: FxHashMap::default(),
         }
     }
 }
@@ -125,17 +127,36 @@ impl Heap {
       }
   }
 
+  fn forwarding_addr(&mut self, p : &Pointer, size : Option<i64>) -> Option<(Pointer, bool, i64)> {
+      match self.forward_map.get(&p.base) {
+          Some(new_base) => 
+              Some((Pointer {base: *new_base, offset: 0}, false, 
+                      *self.size_map.get(new_base).unwrap())),
+          None => {
+              if let Some(s) = size {
+                  let ptr = self.alloc(s).unwrap();
+                  self.forward_map.insert(p.base, ptr.base);
+                  Some((ptr, true, s))
+              } else {
+                  None
+              }
+          },
+      }
+  }
+
   fn process_field(&mut self, fld : &Value) -> Option<Value> {
       if let Value::Pointer(from_ref) = fld {
           let size = self.size_map.remove(&from_ref.base);
-          if let Some(s) = size {
-              let to_ref = self.alloc(s).unwrap();
-              for i in 0..s {
-                  let from = self.memory.get(i as usize + from_ref.base).unwrap().clone();
-                  let to = self.memory.get_mut(i as usize + to_ref.base).unwrap();
-                  *to = from;
+          let forward_addr = self.forwarding_addr(from_ref, size);
+          if let Some((to_ref, should_copy, s)) = forward_addr {
+              if should_copy {
+                  for i in 0..s {
+                      let from = self.memory.get(i as usize + from_ref.base).unwrap().clone();
+                      let to = self.memory.get_mut(i as usize + to_ref.base).unwrap();
+                      *to = from;
+                  }
+                  self.size_map.insert(to_ref.base, s);
               }
-              self.size_map.insert(to_ref.base, s);
               return Some(Value::Pointer(Pointer {base: to_ref.base, offset: from_ref.offset}))
           }
       }
@@ -171,6 +192,7 @@ impl Heap {
         }
       }
       self.clear();
+      self.forward_map.clear();
   }
 
   const fn allocated_size(&self) -> i64 {

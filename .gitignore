@@ -10,6 +10,8 @@ Cargo.lock
 **/*.rs.bk
 
 build/
+node_modules/
 
 *.out
 *.gch
+yarn.lock

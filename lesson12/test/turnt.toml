@@ -1,0 +1,3 @@
+command = "bril2json < {filename} | node ../bril-ts/build/brili.js -p {args}; bril2json < {filename} | cargo run --manifest-path ../tracing-jit/Cargo.toml --quiet"
+# command = "bril2json < {filename} | node ../bril-ts/build/brili.js -p {args}; bril2json < {filename} | cargo run --manifest-path ../tracing-jit/Cargo.toml --quiet | brili -p {args}"
+# command = "bril2json < {filename} | node ../bril-ts/build/brili.js -p {args}"

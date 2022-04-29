@@ -1,0 +1,2 @@
+"abcd"
+substr("zxyabcddsls", h1, h2)

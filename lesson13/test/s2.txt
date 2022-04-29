@@ -1,0 +1,2 @@
+"abcd"
+replace(h1, "e", "c")
